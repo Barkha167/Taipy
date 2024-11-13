@@ -1,16 +1,16 @@
 import os
-import sys
-
 from taipy.gui import Gui, State, notify
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, AutoModelForCausalLM
 from dotenv import load_dotenv
 
-
+# Initialize tokenizer and model
 tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
 model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
+load_dotenv()
 
+headers = {"Authorization": f"Bearer {os.environ['HUGGINGFACE_API_KEY']}"}
 
-
+# Initial context and sample conversation
 context = "The following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n\nHuman: Hello, who are you?\nAI: I am an AI created by OpenAI. How can I help you today?"
 conversation = {
     "Conversation": ["Who are you?", "Hi! I am GPT-4. How can I help you today?"]
@@ -19,7 +19,9 @@ current_user_message = ""
 past_conversations = []
 selected_conv = None
 selected_row = [1]
+rename_input = ""  # Input for renaming chat
 
+# Initialize application state
 def on_init(state: State) -> None:
     state.context = context
     state.conversation = conversation
@@ -27,123 +29,95 @@ def on_init(state: State) -> None:
     state.past_conversations = []
     state.selected_conv = None
     state.selected_row = [1]
+    # state.show_sidebar = True  # Sidebar is visible by default
 
+
+# Generate response using the model
 def request(state: State, prompt: str) -> str:
     inputs = tokenizer(prompt, return_tensors="pt")
     outputs = model.generate(inputs.input_ids, max_length=150, num_return_sequences=1)
     response = tokenizer.decode(outputs[0], skip_special_tokens=True)
     return response
 
+# Update the conversation context with a new user message and AI response
 def update_context(state: State) -> None:
-    """
-    Update the context with the user's message and the AI's response.
-
-    Args:
-        - state: The current state of the app.
-    """
     state.context += f"Human: \n {state.current_user_message}\n\n AI:"
     answer = request(state, state.context).replace("\n", "")
     state.context += answer
     state.selected_row = [len(state.conversation["Conversation"]) + 1]
     return answer
 
-
+# Send message and update conversation state
 def send_message(state: State) -> None:
-    """
-    Send the user's message to the API and update the context.
-
-    Args:
-        - state: The current state of the app.
-    """
     notify(state, "info", "Sending message...")
     answer = update_context(state)
-    conv = state.conversation._dict.copy()
+    conv = state.conversation.copy()
     conv["Conversation"] += [state.current_user_message, answer]
     state.current_user_message = ""
     state.conversation = conv
     notify(state, "success", "Response received!")
 
-def style_conv(state: State, idx: int, row: int) -> str:
-    """
-    Apply a style to the conversation table depending on the message's author.
+# Rename the selected chat
+def rename_chat(state: State) -> None:
+    if state.selected_conv is not None:
+        conv_id = state.selected_conv[0][0]
+        state.past_conversations[conv_id][1]["Conversation"][0] = state.rename_input
+        state.past_conversations[conv_id] = (conv_id, state.past_conversations[conv_id][1])  # Update the tuple with new name
+        state.rename_input = ""
+        notify(state, "success", "Chat renamed successfully!")
+        # Refresh UI by updating the past conversations list
+        state.past_conversations = state.past_conversations.copy()
 
-    Args:
-        - state: The current state of the app.
-        - idx: The index of the message in the table.
-        - row: The row of the message in the table.
+# Delete the selected chat
+def delete_chat(state: State) -> None:
+    if state.selected_conv is not None:
+        conv_id = state.selected_conv[0][0]
+        state.past_conversations.pop(conv_id)
+        state.selected_conv = None
+        notify(state, "success", "Chat deleted successfully!")
+        # Refresh UI by updating the past conversations list
+        state.past_conversations = state.past_conversations.copy()
 
-    Returns:
-        The style to apply to the message.
-    """
-    if idx is None:
-        return None
-    elif idx % 2 == 0:
-        return "user_message"
-    else:
-        return "gpt_message"
-
-def on_exception(state, function_name: str, ex: Exception) -> None:
-    """
-    Catches exceptions and notifies user in Taipy GUI
-
-    Args:
-        state (State): Taipy GUI state
-        function_name (str): Name of function where exception occured
-        ex (Exception): Exception
-    """
-    notify(state, "error", f"An error occured in {function_name}: {ex}")
-
-
+# Reset chat to start a new conversation
 def reset_chat(state: State) -> None:
-    """
-    Reset the chat by clearing the conversation.
-
-    Args:
-        - state: The current state of the app.
-    """
-    state.past_conversations = state.past_conversations + [
-        [len(state.past_conversations), state.conversation]
-    ]
+    # Save the current conversation to history before starting a new one
+    if state.conversation["Conversation"]:
+        state.past_conversations.append(
+            [len(state.past_conversations), state.conversation]
+        )
+    # Start a fresh conversation
     state.conversation = {
         "Conversation": ["Who are you?", "Hi! I am GPT-4. How can I help you today?"]
     }
+    state.context = "The following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n\nHuman: Hello, who are you?\nAI: I am an AI created by OpenAI. How can I help you today? "
+    state.selected_conv = None  # Deselect any past conversation
+    state.selected_row = [1]  # Reset the row selection
 
-
+# Adapter for tree structure in UI
 def tree_adapter(item: list) -> [str, str]:
-    """
-    Converts element of past_conversations to id and displayed string
-
-    Args:
-        item: element of past_conversations
-
-    Returns:
-        id and displayed string
-    """
     identifier = item[0]
     if len(item[1]["Conversation"]) > 3:
-        return (identifier, item[1]["Conversation"][2][:50] + "...")
+        return (identifier, item[1]["Conversation"][0][:50] + "...")
     return (item[0], "Empty conversation")
 
-
+# Select a conversation from the history
 def select_conv(state: State, var_name: str, value) -> None:
-    """
-    Selects conversation from past_conversations
+    if value:  # Ensure there is a selected conversation
+        # Load the selected conversation
+        conv_id = value[0][0]
+        state.conversation = state.past_conversations[conv_id][1]
+        
+        # Rebuild context from selected conversation
+        state.context = "The following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n\nHuman: Hello, who are you?\nAI: I am an AI created by OpenAI. How can I help you today? "
+        for i in range(2, len(state.conversation["Conversation"]), 2):
+            state.context += f"Human: \n {state.conversation['Conversation'][i]}\n\n AI:"
+            state.context += state.conversation["Conversation"][i + 1]
+        
+        # Update selected conversation and row
+        state.selected_conv = value
+        state.selected_row = [len(state.conversation["Conversation"]) + 1]
 
-    Args:
-        state: The current state of the app.
-        var_name: "selected_conv"
-        value: [[id, conversation]]
-    """
-    state.conversation = state.past_conversations[value[0][0]][1]
-    state.context = "The following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n\nHuman: Hello, who are you?\nAI: I am an AI created by OpenAI. How can I help you today? "
-    for i in range(2, len(state.conversation["Conversation"]), 2):
-        state.context += f"Human: \n {state.conversation['Conversation'][i]}\n\n AI:"
-        state.context += state.conversation["Conversation"][i + 1]
-    state.selected_row = [len(state.conversation["Conversation"]) + 1]
-
-
-past_prompts = []
-
+# Define page layout and UI components
 page = """
 <|layout|columns=300px 1|
 <|part|class_name=sidebar|
@@ -151,6 +125,10 @@ page = """
 <|New Conversation|button|class_name=fullwidth plain|id=reset_app_button|on_action=reset_chat|>
 ### History ### {: .h5 .mt2 .mb-half}
 <|{selected_conv}|tree|lov={past_conversations}|class_name=past_prompts_list|multiple|adapter=tree_adapter|on_change=select_conv|>
+
+<|{rename_input}|input|label=Rename chat|on_change=rename_chat|placeholder="Enter new chat name"|>
+<|Rename Chat|button|on_action=rename_chat|class_name=fullwidth mt-1|>
+<|Delete Chat|button|on_action=delete_chat|class_name=fullwidth mt-1 danger|>
 |>
 
 <|part|class_name=p2 align-item-bottom table|
@@ -165,6 +143,3 @@ page = """
 if __name__ == "__main__":
     load_dotenv()
     Gui(page).run(debug=True, dark_mode=True, use_reloader=True, title="💬 Taipy Chat")
-
-
-
