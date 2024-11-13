@@ -6,9 +6,8 @@ from dotenv import load_dotenv
 # Initialize tokenizer and model
 tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
 model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
-load_dotenv()
 
-headers = {"Authorization": f"Bearer {os.environ['HUGGINGFACE_API_KEY']}"}
+
 
 # Initial context and sample conversation
 context = "The following is a conversation with an AI assistant. The assistant is helpful, creative, clever, and very friendly.\n\nHuman: Hello, who are you?\nAI: I am an AI created by OpenAI. How can I help you today?"
